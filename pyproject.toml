@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jatic_dota"
+version = "0.1.0"
+description = "A standalone distribution of BBAVectors-Oriented-Object-Detection for inference on the DOTA dataset."
+authors = [
+    { name = "Reference Implementation Team", email = "connect@quansight.com" },
+]
+dependencies = [
+    "torch",
+    "shapely",
+    "pillow",
+    "numpy",
+    "httpx",
+    "matplotlib",
+    "tqdm"
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipython",
+    "ruff",
+]
+
+[tool.setuptools.package-dir]
+"jatic_dota" = "src/jatic_dota"

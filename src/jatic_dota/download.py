@@ -1,25 +1,22 @@
-import io
-import zipfile
 from pathlib import Path
-
 import httpx
 from tqdm import tqdm
 
-from .log import logger
+from .log import logger  # Assuming you have a logger module
 
 MODEL_URLS = {
-    "model_50": "https://www.dropbox.com/scl/fo/jo1mfnz7dbocep5vusdgb/ANY07_g56yYA3UukilSgIcs/model_50.zip?rlkey=45mxubsaoayymtjah9c51q0ov&dl=1",
-    "model_43": "https://www.dropbox.com/scl/fo/jo1mfnz7dbocep5vusdgb/AEansoxtiwm65LjtflrQAxU/model_43.zip?rlkey=45mxubsaoayymtjah9c51q0ov&dl=1",
+    "model_50": "https://github.com/nenb/jatic-dota/releases/download/v0.0.1/model_50.pth",
 }
 
 
-def download_and_unzip_in_memory(extract_dir: Path, model_name: str):
+def download_pickle_to_file(filepath: Path, model_name: str):
     """
-    Streams a ZIP file from the given URL into memory and extracts
-    it directly to 'extract_dir' without writing a ZIP file to disk.
+    Downloads a pickle file from the given URL and saves it to the specified filepath.
     """
     url = MODEL_URLS[model_name]
+
     with httpx.stream("GET", url, follow_redirects=True) as response:
+        response.raise_for_status()
         total_length = int(response.headers.get("Content-Length", 0))
         chunk_size = 1024
 
@@ -27,17 +24,13 @@ def download_and_unzip_in_memory(extract_dir: Path, model_name: str):
             total=total_length, unit="iB", unit_scale=True, desc="Downloading DOTA model ..."
         )
 
-        in_memory_zip = io.BytesIO()
+        filepath.parent.mkdir(parents=True, exist_ok=True)
 
-        for chunk in response.iter_bytes(chunk_size=chunk_size):
-            in_memory_zip.write(chunk)
-            progress_bar.update(len(chunk))
+        with open(filepath, "wb") as f:
+            for chunk in response.iter_bytes(chunk_size=chunk_size):
+                f.write(chunk)
+                progress_bar.update(len(chunk))
 
         progress_bar.close()
 
-    in_memory_zip.seek(0)
-
-    with zipfile.ZipFile(in_memory_zip, "r") as zip_ref:
-        zip_ref.extractall(extract_dir)
-
-    logger.info(f"Files extracted to {extract_dir} .")
+    logger.info(f"Pickle file downloaded and saved to {filepath} .")

@@ -6,4 +6,4 @@ A standalone distribution of [BBAVectors-Oriented-Object-Detection](https://gith
 
 1. Install `uv`: https://docs.astral.sh/uv/getting-started/installation/.
 
-3. Run `uv run script.py`. **Warning** This will load a Pickle file shared by [BBAVectors-Oriented-Object-Detection](https://github.com/yijingru/BBAVectors-Oriented-Object-Detection/tree/11dad9aefab65f68f9330824980ee0c08bdb7234). This is done at your own risk!
+2. Run `uv run script.py`.

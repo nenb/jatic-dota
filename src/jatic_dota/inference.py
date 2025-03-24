@@ -13,7 +13,7 @@ from tqdm import tqdm
 from .decoder import DecDecoder
 from .geometry_utils import Detection, apply_nms_patch, nms_obb
 from .models import ctrbox_net
-from .download import download_and_unzip_in_memory
+from .download import download_pickle_to_file
 from .log import logger
 
 DOWN_RATIO = 4
@@ -228,20 +228,21 @@ def initialize_model(
 
     Args:
         device: The device to load the model onto. Defaults to the best available device.
-        weights_dir: Path to the model weights. Defaults to "model_50.pth".
+        weights_dir: Path to the model weights.
 
     Returns:
         The initialized CTRBOX model.
     """
-    if not os.path.exists(weights_dir):
-        download_and_unzip_in_memory(extract_dir=weights_dir, model_name=model_name)
+    filepath = Path(f"{weights_dir}/{model_name}")
+    if not os.path.exists(filepath):
+        download_pickle_to_file(filepath=filepath, model_name=model_name)
 
     logger.info(f"Loading DOTA model onto {device} ...")
     model = ctrbox_net.CTRBOX(down_ratio=DOWN_RATIO)
     checkpoint = torch.load(
-        f"{weights_dir}/{model_name}/{model_name}.pth", map_location=device
+        f"{weights_dir}/{model_name}", weights_only=True, map_location=device
     )
-    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+    model.load_state_dict(checkpoint, strict=False)
     model.to(device)
     model.eval()
     logger.info(f"Loaded DOTA model onto {device}!")

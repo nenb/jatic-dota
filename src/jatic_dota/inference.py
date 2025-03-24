@@ -109,8 +109,10 @@ def preprocess_image(img_arr: npt.NDArray, device: torch.device) -> list[Patch]:
         y_positions = list(range(0, H - patch_size + 1, stride))
         if y_positions[-1] + patch_size < H:
             y_positions.append(H - patch_size)
-            
-        logger.info(f"Image is too large. Splitting into {len(y_positions)*len((x_positions))} patches ...")
+
+        logger.info(
+            f"Image is too large. Splitting into {len(y_positions) * len((x_positions))} patches ..."
+        )
 
         for y in y_positions:
             for x in x_positions:
@@ -233,15 +235,13 @@ def initialize_model(
     Returns:
         The initialized CTRBOX model.
     """
-    filepath = Path(f"{weights_dir}/{model_name}")
+    filepath = Path(f"{weights_dir}/{model_name}.pth")
     if not os.path.exists(filepath):
         download_pickle_to_file(filepath=filepath, model_name=model_name)
 
     logger.info(f"Loading DOTA model onto {device} ...")
     model = ctrbox_net.CTRBOX(down_ratio=DOWN_RATIO)
-    checkpoint = torch.load(
-        f"{weights_dir}/{model_name}", weights_only=True, map_location=device
-    )
+    checkpoint = torch.load(filepath, weights_only=True, map_location=device)
     model.load_state_dict(checkpoint, strict=False)
     model.to(device)
     model.eval()
@@ -326,7 +326,7 @@ def dota_inference(
     results = []
     for patch, prediction in patch_prediction_pairs:
         results.extend(postprocess_predictions(prediction, patch))
-        
+
     # this final NMS is required as patches overlap and this can lead to overlapping
     # bounding boxes that come from separate patches
     results_nms = nms_obb(results)

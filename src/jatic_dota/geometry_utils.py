@@ -76,7 +76,9 @@ def nms_obb(detections: list[Detection], thresh: float = 0.1) -> list[Detection]
     return [detections[i] for i in keep]
 
 
-def apply_nms_patch(detections_by_category: dict[int, list[Detection]]) -> list[Detection]:
+def apply_nms_patch(
+    detections_by_category: dict[int, list[Detection]],
+) -> list[Detection]:
     """
     Applies Non-Maximum Suppression (NMS) across all categories on an individual patch.
 

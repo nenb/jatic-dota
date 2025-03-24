@@ -5,6 +5,7 @@ import tempfile
 import os
 import hashlib
 
+
 def get_save_path(img_hash):
     tmp_dir = tempfile.gettempdir()
     filename = f"{img_hash}.png"
@@ -13,7 +14,7 @@ def get_save_path(img_hash):
 
 
 def plot_bounding_boxes(img, detections, save=True):
-    logger.info("Generating plot of predictions ...")    
+    logger.info("Generating plot of predictions ...")
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.imshow(img)
 
@@ -47,13 +48,13 @@ def plot_bounding_boxes(img, detections, save=True):
             polygon_points, closed=True, edgecolor=color, facecolor="none"
         )
         ax.add_patch(poly)
-    
+
     if save:
         array_hash = hashlib.md5(img.tobytes()).hexdigest()
         save_path = get_save_path(array_hash)
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.close()
         logger.info(f"Plot containing model predictions saved to {save_path}!")
-    
+
     else:
         return fig, ax

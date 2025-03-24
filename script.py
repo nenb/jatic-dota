@@ -2,7 +2,7 @@
 # requires-python = ">=3.9"
 # dependencies = [ "jatic_dota" ]
 # [tool.uv.sources]
-# jatic_dota = { git = "https://github.com/nenb/jatic-dota.git", rev = "main" }
+# jatic_dota = { git = "https://github.com/nenb/jatic-dota.git", rev = "v0.1.0" }
 # ///
 
 import subprocess

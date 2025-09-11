@@ -1,20 +1,26 @@
+from datetime import datetime
 import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-
+from typing import Any, TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 import torch
 from PIL import Image
 import math
 from tqdm import tqdm
+import warnings
 
-from .decoder import DecDecoder
-from .geometry_utils import Detection, apply_nms_patch, nms_obb
-from .models import ctrbox_net
-from .download import download_pickle_to_file
+from .bbav.bbav_decoder import DecDecoder
+from .geometry_utils import Detection, apply_nms_patch, nms_obb_fast
+from .bbav import ctrbox_net
+from .model_weights_download import download_pickle_to_file
 from .log import logger
+
+if TYPE_CHECKING:
+    from detectron2.structures.instances import Instances
+    from .dafne.one_stage_detector import OneStageDetector
 
 DOWN_RATIO = 4
 
@@ -40,7 +46,7 @@ CATEGORIES = {
 @dataclass
 class Patch:
     """
-    Represents a square 600x600 region extracted from an image.
+    Represents a square region extracted from an image.
 
     This dataclass stores the image data of the patch and the coordinates
     of its bottom-left corner within the original image from which it was extracted.
@@ -51,11 +57,11 @@ class Patch:
     y_offset: int
 
 
-def prepare_patch_for_model(
+def prepare_patch_for_bbav_model(
     image_patch: npt.NDArray, device: torch.device
 ) -> torch.Tensor:
     """
-    Transforms an image patch into the format expected by a model.
+    Transforms an image patch into the format expected by the BBAV model.
 
     This function performs the following transformations:
     1. Normalizes the image patch to the range [-0.5, 0.5].
@@ -65,7 +71,6 @@ def prepare_patch_for_model(
 
     Args:
         image_patch: The image patch to prepare (HWC format).
-        patch_size: The height and width of the patch.
         device: The device to move the tensor to.
 
     Returns:
@@ -77,16 +82,16 @@ def prepare_patch_for_model(
     return torch.from_numpy(image_patch).to(device)
 
 
-def preprocess_image(img_arr: npt.NDArray, device: torch.device) -> list[Patch]:
+def preprocess_image(model_name: str, img_arr: npt.NDArray, device: torch.device) -> list[Patch]:
     """
     Splits an image into patches and preprocesses them for model input.
 
-    This function divides an input image into overlapping patches of size 600x600.
-    If the image's height or width is larger than the patch size, the image is split
-    into multiple overlapping patches. Otherwise, the entire image is treated as a
-    single patch.
+    This function divides an input image into overlapping patches. If the image's 
+    height or width is larger than the patch size, the image is split into multiple
+    overlapping patches. Otherwise, the entire image is treated as a single patch.
 
     Args:
+        model_name: The name of the model that is used.
         img_arr: The input image as a NumPy array (HWC format).
         device: The PyTorch device to move the preprocessed patches to.
 
@@ -97,11 +102,29 @@ def preprocess_image(img_arr: npt.NDArray, device: torch.device) -> list[Patch]:
 
     H, W, _ = img_arr.shape
     patches = []
-    patch_size = 600
-    overlap = 100
-    stride = patch_size - overlap
+
+    if model_name == "bbav":
+        patch_size = 600  # model trained on this size, do not change
+        overlap = 100  # model trained on this size, do not change
+        stride = patch_size - overlap
+        prepare_patch_for_model = prepare_patch_for_bbav_model
+    
+    elif model_name == "dafne":
+        patch_size = 1024  # model trained on this size, do not change
+        overlap = 200  # model trained on this size, do not change
+        stride = patch_size - overlap
+        
+        def prepare_patch_for_dafne_model(image_patch: npt.NDArray, device: torch.device) -> torch.Tensor:
+            image_patch = image_patch.transpose(2, 0, 1)  # HWC to CHW
+            return torch.from_numpy(image_patch).to(device)
+        
+        prepare_patch_for_model = prepare_patch_for_dafne_model
+    
+    else:
+        raise ValueError(f"Model {model_name} is not supported.")
 
     if H > patch_size or W > patch_size:
+        
         x_positions = list(range(0, W - patch_size + 1, stride))
         if x_positions[-1] + patch_size < W:
             x_positions.append(W - patch_size)
@@ -122,23 +145,114 @@ def preprocess_image(img_arr: npt.NDArray, device: torch.device) -> list[Patch]:
                 patches.append(Patch(image=img, x_offset=x, y_offset=y))
 
     else:
+        
         img = prepare_patch_for_model(img_arr, device)
         patches.append(Patch(image=img, x_offset=0, y_offset=0))
 
     return patches
 
+def get_device() -> torch.device:
+    """Returns the best available device (CUDA, MPS, or CPU)."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
 
-def extract_detections(
+def initialize_bbav_model(
+    device: torch.device = get_device(),
+    weights_dir: Path = Path("~/.cache/dota/bbav").expanduser().resolve(),
+    weights_file_name: str = "model_50",
+) -> ctrbox_net.CTRBOX:
+    """
+    Initializes the BBAV model (CTRBOX) with pretrained weights and sets it to evaluation mode.
+
+    Checks if the specified `weights_dir` exists. If not, it downloads and saves the
+    pretrained weights.
+
+    See https://arxiv.org/pdf/2008.07043 for details on the CTRBOX model.
+
+    Args:
+        device: The device to load the model onto. Defaults to the best available device.
+        weights_dir: Path to the model weights.
+        weights_file_name: The name of the file where the weights are stored.
+
+    Returns:
+        The initialized CTRBOX model.
+    """
+    filepath = Path(f"{weights_dir}/{weights_file_name}.pth")
+    if not os.path.exists(filepath):
+        download_pickle_to_file(filepath=filepath, weights_file_name=weights_file_name)
+
+    logger.info(f"Loading DOTA model onto {device} ...")
+    model = ctrbox_net.CTRBOX(down_ratio=DOWN_RATIO)
+    checkpoint = torch.load(filepath, weights_only=True, map_location=device)
+    model.load_state_dict(checkpoint, strict=False)
+    model.to(device)
+    model.eval()
+    logger.info(f"Loaded DOTA model onto {device}!")
+    return model
+
+
+def initialize_dafne_model(
+    device: torch.device = get_device(),
+    weights_dir: Path = Path("~/.cache/dota/dafne").expanduser().resolve(),
+    weights_file_name: str = "dota-1.0-r101-ms",
+) -> "OneStageDetector":
+    """
+    Initializes the DAFNe model with pretrained weights and sets it to evaluation mode.
+
+    Checks if the specified `weights_dir` exists. If not, it downloads and saves the
+    pretrained weights.
+
+    See https://arxiv.org/pdf/2109.06148 for details on the DAFNe model.
+
+    Args:
+        device: The device to load the model onto. Defaults to the best available device.
+        weights_dir: Path to the model weights.
+
+    Returns:
+        The initialized DAFNe model.
+    """
+    from detectron2.checkpoint import DetectionCheckpointer
+    from detectron2.modeling import build_model
+    from .dafne.dafne_config import cfg
+
+    cfg.merge_from_file("resources/dota-1.0_r101_ms.yaml")
+    cfg.MODEL.DEVICE = str(device)
+    cfg.freeze()
+
+    model = build_model(cfg)
+
+    filepath = Path(f"{weights_dir}/{weights_file_name}.pth")
+    if not os.path.exists(filepath):
+        download_pickle_to_file(filepath=filepath, weights_file_name=weights_file_name)
+
+    logger.info(f"Loading DOTA model onto {device} ...")
+    with warnings.catch_warnings():
+        # suppress arbitrary code execution warning as should be using trusted source...
+        warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.load.*weights_only.*")
+
+        _ = DetectionCheckpointer(model, save_to_disk=False).resume_or_load(
+            f"{filepath}", resume=True
+        )
+    model.eval()
+    logger.info(f"Loaded DOTA model onto {device}!")
+    return model
+
+
+def postprocess_bbav_predictions(
     predictions: npt.NDArray, patch: Patch
 ) -> dict[int, list[Detection]]:
     """
-    Extracts detection information from model predictions and organizes it by category.
+    Postprocesses BBAV model predictions by extracting detections and applying Non-Maximum Suppression (NMS).
 
     This function processes model predictions, converting them into Detection objects
     containing polygon coordinates, confidence scores, and category IDs. The detections
     are adjusted based on the downsampling ratio and the patch's offset in the original
     image. The extracted detections are then organized into a dictionary where keys are
-    category IDs and values are lists of Detection objects.
+    category IDs and values are lists of Detection objects before applying NMS.
 
     Args:
         predictions: The model's prediction output as a NumPy array. Each prediction is
@@ -187,66 +301,56 @@ def extract_detections(
             Detection(polygon=bbox, score=score, category=category_id)
         )
 
-    return detections_by_category
-
-
-def postprocess_predictions(predictions: npt.NDArray, patch: Patch) -> list[Detection]:
-    """
-    Postprocesses model predictions by extracting detections and applying Non-Maximum Suppression (NMS).
-
-    Args:
-        predictions: The model's prediction output.
-        patch: A Patch object representing the image patch.
-
-    Returns:
-        A list of Detection objects after NMS.
-    """
-    detections_by_category = extract_detections(predictions, patch)
     return apply_nms_patch(detections_by_category)
 
 
-def get_device() -> torch.device:
-    """Returns the best available device (CUDA, MPS, or CPU)."""
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        return torch.device("mps")
-    else:
-        return torch.device("cpu")
-
-
-def initialize_model(
-    device: torch.device = get_device(),
-    weights_dir: Path = Path("~/.cache/dota").expanduser().resolve(),
-    model_name: str = "model_50",
-) -> ctrbox_net.CTRBOX:
+def postprocess_dafne_predictions(
+    instances: "Instances", patch: Patch, conf_thresh: int
+) -> dict[int, list[Detection]]:
     """
-    Initializes the CTRBOX model with pretrained weights and sets it to evaluation mode.
+    Postprocesses DAFNe model predictions by extracting detections and applying Non-Maximum Suppression (NMS).
 
-    Checks if the specified `weights_dir` exists. If not, it downloads and saves the
-    pretrained weights.
-
-    See https://arxiv.org/pdf/2008.07043 for details on the CTRBOX model.
-
+    This function processes model predictions, converting them into Detection objects
+    containing polygon coordinates, confidence scores, and category IDs. The detections
+    are adjusted based on the patch's offset in the original image. The extracted
+    detections are then organized into a dictionary where keys are category IDs and
+    values are lists of Detection objects before applying NMS.
+    
     Args:
-        device: The device to load the model onto. Defaults to the best available device.
-        weights_dir: Path to the model weights.
+        instances: The model's prediction output as a detectron2 Instances data structure.
+        patch: A Patch object containing the patch's offset within the original image.
+        conf_thresh: The confidence threshold for detections.
 
     Returns:
-        The initialized CTRBOX model.
+        A dictionary where keys are category IDs and values are lists of Detection
+        objects.
     """
-    filepath = Path(f"{weights_dir}/{model_name}.pth")
-    if not os.path.exists(filepath):
-        download_pickle_to_file(filepath=filepath, model_name=model_name)
+    detections_by_category: dict[int, list[Detection]] = {id_: [] for id_ in CATEGORIES}
 
-    logger.info(f"Loading DOTA model onto {device} ...")
-    model = ctrbox_net.CTRBOX(down_ratio=DOWN_RATIO)
-    checkpoint = torch.load(filepath, weights_only=True, map_location=device)
-    model.load_state_dict(checkpoint, strict=False)
-    model.to(device)
-    model.eval()
-    logger.info(f"Loaded DOTA model onto {device}!")
-    return model
+    for i in range(instances.pred_corners.shape[0]):
+
+        if instances.scores[i] < conf_thresh:
+            continue
+
+        category_id = int(instances.pred_classes[i].item())
+        score = instances.scores[i]        
+        corners = list(instances.pred_corners[i].unbind())
+        bbox = [
+            corners[0] + patch.x_offset,
+            corners[1] + patch.y_offset,
+            corners[2] + patch.x_offset,
+            corners[3] + patch.y_offset,
+            corners[4] + patch.x_offset,
+            corners[5] + patch.y_offset,
+            corners[6] + patch.x_offset,
+            corners[7] + patch.y_offset,
+        ]
+
+        detections_by_category[category_id].append(
+            Detection(polygon=bbox, score=score, category=category_id)
+        )
+
+    return apply_nms_patch(detections_by_category)
 
 
 def _get_random_image():
@@ -263,9 +367,9 @@ def _get_random_image():
     return np.array(img)
 
 
-def dota_inference(
+def bbav_inference(
     img_arr: npt.NDArray = _get_random_image(),
-    model: ctrbox_net.CTRBOX = initialize_model(),
+    model: ctrbox_net.CTRBOX | None = None,
     batch_size: int = 4,
     num_keypoints: int = 500,
     conf_thresh: float = 0.1,
@@ -280,7 +384,7 @@ def dota_inference(
 
     Args:
         img_arr: The input image as a NumPy array.
-        model: The CTRBOX model to use for inference. Defaults to initialize_model().
+        model: The CTRBOX model to use for inference. Defaults to initialize_bbav_model().
         batch_size: The batch size for processing patches. Defaults to 4.
         num_keypoints: The number of keypoints for decoding predictions. Defaults to 500.
         conf_thresh: The confidence threshold for detections. Defaults to 0.1.
@@ -291,9 +395,12 @@ def dota_inference(
     # TODO: how important is this specific seed?
     torch.manual_seed(317)
 
+    if model is None:
+        model = initialize_bbav_model()
+
     device = next(model.parameters()).device
 
-    patches = preprocess_image(img_arr, device)
+    patches = preprocess_image("bbav", img_arr, device)
 
     patch_prediction_pairs: list[tuple[Patch, npt.NDArray]] = []
     num_batches = math.ceil(len(patches) / batch_size)
@@ -325,10 +432,85 @@ def dota_inference(
 
     results = []
     for patch, prediction in patch_prediction_pairs:
-        results.extend(postprocess_predictions(prediction, patch))
+        results.extend(postprocess_bbav_predictions(prediction, patch))
 
     # this final NMS is required as patches overlap and this can lead to overlapping
     # bounding boxes that come from separate patches
-    results_nms = nms_obb(results)
+    results_nms = nms_obb_fast(results)
+
+    return img_arr, results_nms
+
+def dafne_inference(
+    img_arr: npt.NDArray = _get_random_image(),
+    model: Any = None,
+    batch_size: int = 8,
+    conf_thresh: float = 0.5,
+) -> tuple[npt.NDArray, list[Detection]]:
+    """
+    Performs inference on an image from the DOTA dataset using the DAFNe model. If
+    the image is too large, it is processed in patches.
+
+    This function preprocesses an input image, divides it into patches, performs
+    inference using the model, decodes the predictions, and postprocesses the
+    results.
+
+    Args:
+        img_arr: The input image as a NumPy array.
+        model: The DAFNe model to use for inference. Defaults to initialize_dafne_model().
+        batch_size: The batch size for processing patches. Defaults to 4.
+        conf_thresh: The confidence threshold for detections. Defaults to 0.5.
+
+    Returns:
+        A list of Detection objects
+    """   
+    seed = (
+        os.getpid()
+        + int(datetime.now().strftime("%S%f"))
+        + int.from_bytes(os.urandom(2), "big")
+    )
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    if model is None:
+        model = initialize_dafne_model()
+
+    device = next(model.parameters()).device
+
+    patches = preprocess_image("dafne", img_arr, device)
+
+    patch_instance_pairs: list[tuple[Patch, Instances]] = []
+    num_batches = math.ceil(len(patches) / batch_size)
+    for i in tqdm(
+        range(0, len(patches), batch_size),
+        total=num_batches,
+        desc="Processing image patches",
+        unit="batch",
+    ):
+        batch_patches = patches[i : i + batch_size]
+        with torch.no_grad():
+            with warnings.catch_warnings():
+                # suppress arbitrary code execution warning as should be using trusted source...
+                warnings.filterwarnings("ignore", category=UserWarning, message=".*torch.meshgrid.*indexing argument.*")
+                output = model([{"image":patch.image, "height": patch.image.size(1), "width": patch.image.size(2)} for patch in batch_patches])
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+
+        patch_instance_pairs.extend(
+            [
+                (patch, pred["instances"].to("cpu"))
+                for patch, pred in zip(batch_patches, output)
+            ]
+        )
+
+    results = []
+    for patch, instance in patch_instance_pairs:
+        results.extend(postprocess_dafne_predictions(instance, patch, conf_thresh))
+
+    # this final NMS is required as patches overlap and this can lead to overlapping
+    # bounding boxes that come from separate patches
+    results_nms = nms_obb_fast(results)
 
     return img_arr, results_nms

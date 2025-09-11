@@ -4,26 +4,35 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jatic_dota"
-version = "0.1.0"
-description = "A standalone distribution of BBAVectors-Oriented-Object-Detection for inference on the DOTA dataset."
+version = "0.2.0"
+description = "A standalone distribution of BBAVectors-Oriented-Object-Detection and DAFNe for inference on the DOTA dataset."
 authors = [
     { name = "Reference Implementation Team", email = "connect@quansight.com" },
 ]
 dependencies = [
-    "torch",
-    "shapely",
-    "pillow",
-    "numpy",
-    "httpx",
-    "matplotlib",
-    "tqdm"
+    "torch==2.4.1",
+    "shapely==2.0.7",
+    "pillow==11.1.0",
+    "numpy==2.2.4",
+    "httpx==0.28.1",
+    "matplotlib==3.10.1",
+    "tqdm==4.67.1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "ipython",
     "ruff",
+    "jupyterlab",
 ]
+dafne = [
+    "detectron2 @ git+https://github.com/facebookresearch/detectron2.git@a1ce2f9",
+    "opencv-python==4.12.0",
+    "fvcore==0.1.5.post20221221",
+    "tensorboard==1.15.0",
+    "torchvision==0.19.1",
+]
+all = ["jatic_dota[dev]", "jatic_dota[dafne]"]
 
 [tool.setuptools.package-dir]
 "jatic_dota" = "src/jatic_dota"

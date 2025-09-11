@@ -3,6 +3,7 @@ import logging
 logger = logging.getLogger("jatic_dota")
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger('fvcore').setLevel(logging.ERROR)
 
 if not logger.hasHandlers():
     logger.setLevel(logging.INFO)

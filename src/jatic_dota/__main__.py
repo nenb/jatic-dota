@@ -1,7 +1,6 @@
 import argparse
-from jatic_dota.inference import dota_inference
+from jatic_dota.inference import bbav_inference, dafne_inference
 from jatic_dota.plot import plot_bounding_boxes
-import os
 from jatic_dota.log import logger
 from PIL import Image
 import numpy as np
@@ -15,6 +14,13 @@ def main():
         default=None,
         help="Path to the image file. If not provided, a default image will be used.",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="bbav",
+        choices=["bbav", "dafne"],
+        help="Model to use for inference. Choose from 'bbav' or 'dafne'. Default is 'bbav'.",
+    )
 
     args = parser.parse_args()
 
@@ -25,7 +31,13 @@ def main():
         logger.warning(f"Error opening image path. Using default image instead...")
         kwargs = {}
 
-    img, results = dota_inference(**kwargs)
+    if args.model == "bbav":
+        img, results = bbav_inference(**kwargs)
+    elif args.model == "dafne":
+        img, results = dafne_inference(**kwargs)
+    else:
+        raise Exception("Invalid model selected for inference.")
+    
     plot_bounding_boxes(img, results)
 
 

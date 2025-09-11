@@ -2,18 +2,19 @@ from pathlib import Path
 import httpx
 from tqdm import tqdm
 
-from .log import logger  # Assuming you have a logger module
+from .log import logger
 
 MODEL_URLS = {
     "model_50": "https://github.com/nenb/jatic-dota/releases/download/v0.1.0/model_50.pth",
+    "dota-1.0-r101-ms": "https://github.com/nenb/jatic-dota/releases/download/v0.2.0/dota-1.0-r101-ms.pth",
 }
 
 
-def download_pickle_to_file(filepath: Path, model_name: str):
+def download_pickle_to_file(filepath: Path, weights_file_name: str):
     """
     Downloads a pickle file from the given URL and saves it to the specified filepath.
     """
-    url = MODEL_URLS[model_name]
+    url = MODEL_URLS[weights_file_name]
 
     with httpx.stream("GET", url, follow_redirects=True) as response:
         response.raise_for_status()

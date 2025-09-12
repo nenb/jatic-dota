@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=68", "wheel", "packaging", "ninja; platform_system != 'Windows'"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,15 +11,12 @@ authors = [
     { name = "Reference Implementation Team", email = "connect@quansight.com" },
 ]
 dependencies = [
-    "torch==2.4.1",
-    "torchvision==0.19.1",
     "shapely==2.0.7",
     "pillow==11.1.0",
     "numpy==2.2.4",
     "httpx==0.28.1",
     "matplotlib==3.10.1",
     "tqdm==4.67.1",
-    "detectron2 @ git+https://github.com/facebookresearch/detectron2.git@a1ce2f9",
     "opencv-python==4.12.0.88",
     "fvcore==0.1.5.post20221221",
     "tensorboard==1.15.0",
@@ -41,6 +38,20 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = [
+  "jatic_dota._vendor.detectron2.tests*",
+  "jatic_dota._vendor.detectron2.docs*",
+  "jatic_dota._vendor.detectron2.projects*",
+]
 
 [tool.setuptools.package-data]
 jatic_dota = ["resources/*"]
+"jatic_dota._vendor.detectron2" = [
+  "model_zoo/configs/**/*.yaml",
+  "model_zoo/configs/**/*.py",
+  "layers/csrc/**/*.h",
+  "layers/csrc/**/*.hpp",
+  "layers/csrc/**/*.cpp",
+  "layers/csrc/**/*.cu",
+  "../LICENSE",
+]

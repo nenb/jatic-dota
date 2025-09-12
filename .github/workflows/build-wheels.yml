@@ -73,7 +73,7 @@ jobs:
       # Linux CUDA toolkits for cu118/cu121/cu124
       - name: Install CUDA toolkit
         if: runner.os == 'Linux' && matrix.variant != 'cpu'
-        uses: Jimver/cuda-toolkit@v0.2.11
+        uses: Jimver/cuda-toolkit@v0.2.24
         with:
           cuda: ${{ matrix.variant == 'cu118' && '11.8.0' || matrix.variant == 'cu121' && '12.1.1' || '12.4.1' }}
 

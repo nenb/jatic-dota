@@ -9,24 +9,40 @@ on:
 
 jobs:
   build-wheels:
-    name: Build wheels on ${{ matrix.os }} (py${{ matrix.python-version }}, ${{ matrix.variant }})
+    name: ${{ matrix.os }} py${{ matrix.python }} ${{ matrix.variant }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12']
-        variant: [cpu, cu118, cu121, cu124]
-        exclude:
-          # macOS: CPU-only
-          - os: macos-latest
-            variant: cu118
-          - os: macos-latest
-            variant: cu121
-          - os: macos-latest
-            variant: cu124
+        include:
+          # Linux CPU
+          - { os: ubuntu-latest, python: '3.10', variant: cpu }
+          - { os: ubuntu-latest, python: '3.11', variant: cpu }
+          - { os: ubuntu-latest, python: '3.12', variant: cpu }
+
+          # Linux CUDA 11.8
+          - { os: ubuntu-latest, python: '3.10', variant: cu118 }
+          - { os: ubuntu-latest, python: '3.11', variant: cu118 }
+          - { os: ubuntu-latest, python: '3.12', variant: cu118 }
+
+          # Linux CUDA 12.1
+          - { os: ubuntu-latest, python: '3.10', variant: cu121 }
+          - { os: ubuntu-latest, python: '3.11', variant: cu121 }
+          - { os: ubuntu-latest, python: '3.12', variant: cu121 }
+
+          # Linux CUDA 12.4
+          - { os: ubuntu-latest, python: '3.10', variant: cu124 }
+          - { os: ubuntu-latest, python: '3.11', variant: cu124 }
+          - { os: ubuntu-latest, python: '3.12', variant: cu124 }
+
+          # macOS (CPU only)
+          - { os: macos-latest, python: '3.10', variant: cpu }
+          - { os: macos-latest, python: '3.11', variant: cpu }
+          - { os: macos-latest, python: '3.12', variant: cpu }
+
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
+      TORCH_CUDA_ARCH_LIST: "7.5;8.0;8.6;8.9;9.0"  # ignored on cpu/mac
 
     steps:
       - name: Checkout (with submodules)
@@ -42,14 +58,14 @@ jobs:
           python - <<'PY'
           import os, sys
           p="src/jatic_dota/_vendor/detectron2/detectron2/layers/csrc"
-          ok = os.path.isdir(p) and any(fn.endswith((".cpp",".cu")) for d,_,fs in os.walk(p) for fn in fs)
+          ok = os.path.isdir(p) and any(fn.endswith((".cpp",".cu")) for _,_,fs in os.walk(p) for fn in fs)
           sys.exit(0 if ok else 1)
           PY
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python }}
 
       - name: macOS build flags
         if: runner.os == 'macOS'
@@ -59,68 +75,75 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
 
-      - name: Set variant env
-        run: |
-          echo "JATIC_TORCH_VARIANT=${{ matrix.variant }}" >> $GITHUB_ENV
-          if [ "${{ matrix.variant }}" = "cpu" ]; then
-            echo "FORCE_CUDA=0" >> $GITHUB_ENV
-          else
-            echo "FORCE_CUDA=1" >> $GITHUB_ENV
-            # reasonable arch list without exploding size/time
-            echo "TORCH_CUDA_ARCH_LIST=7.5;8.0;8.6;8.9;9.0" >> $GITHUB_ENV
-          fi
-
-      # Linux CUDA toolkits for cu118/cu121/cu124
-      - name: Install CUDA toolkit
+      # --- CUDA Toolkit only for Linux + CUDA variants ---
+      - name: Install CUDA Toolkit
         if: runner.os == 'Linux' && matrix.variant != 'cpu'
         uses: Jimver/cuda-toolkit@v0.2.24
         with:
+          # Map variants to specific CUDA toolkits
           cuda: ${{ matrix.variant == 'cu118' && '11.8.0' || matrix.variant == 'cu121' && '12.1.1' || '12.4.1' }}
+          # Make the action's log artifact name unique per matrix run to avoid 409 Conflict
+          log-file-suffix: ${{ matrix.variant }}-py${{ matrix.python }}-${{ runner.os }}-${{ github.run_id }}
 
-      - name: Install build deps + Torch (${{ matrix.variant }})
+      # --- Per-variant env for setup.py ---
+      - name: Configure build variant env
+        run: |
+          if [ "${{ matrix.variant }}" = "cpu" ]; then
+            echo "JATIC_TORCH_VARIANT=cpu" >> $GITHUB_ENV
+            echo "FORCE_CUDA=0" >> $GITHUB_ENV
+          else
+            echo "JATIC_TORCH_VARIANT=${{ matrix.variant }}" >> $GITHUB_ENV
+            echo "FORCE_CUDA=1" >> $GITHUB_ENV
+          fi
+
+      - name: Install build deps
         run: |
           python -m pip install --upgrade pip
           pip install "setuptools>=68" wheel build ninja packaging
+
+      # Install the right Torch for the variant so build_ext can find headers/libs
+      - name: Install matching PyTorch
+        run: |
           case "${{ matrix.variant }}" in
             cpu)
-              pip install torch==2.4.1 torchvision==0.19.1
+              # macOS and Linux CPU wheels
+              pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
               ;;
             cu118)
-              pip install --index-url https://download.pytorch.org/whl/cu118 torch==2.4.1+cu118 torchvision==0.19.1+cu118
+              pip install torch==2.4.1+cu118 torchvision==0.19.1+cu118 --index-url https://download.pytorch.org/whl/cu118
               ;;
             cu121)
-              pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.4.1+cu121 torchvision==0.19.1+cu121
+              pip install torch==2.4.1+cu121 torchvision==0.19.1+cu121 --index-url https://download.pytorch.org/whl/cu121
               ;;
             cu124)
-              pip install --index-url https://download.pytorch.org/whl/cu124 torch==2.4.1+cu124 torchvision==0.19.1+cu124
+              pip install torch==2.4.1+cu124 torchvision==0.19.1+cu124 --index-url https://download.pytorch.org/whl/cu124
               ;;
           esac
-          python -c "import torch, sys; print('torch', torch.__version__, 'cuda_is_available=', torch.cuda.is_available(), 'build', torch.version.cuda); sys.exit(0)"
+          python -c "import torch, torchvision; print('Torch:', torch.__version__, '| CUDA:', torch.version.cuda)"
 
-      - name: Build wheel (non-isolated so Torch is visible)
+      - name: Build wheel (no isolation so Torch is visible)
         run: python -m build --wheel --no-isolation -v
 
-      - name: Build sdist (single run)
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && matrix.variant == 'cpu'
+      - name: Build sdist (single)
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11' && matrix.variant == 'cpu'
         run: python -m build --sdist --no-isolation -v
 
       - name: Smoke test install
         run: |
           WHEEL_FILE=$(ls dist/*.whl)
-          # Reuse the Torch we already installed above; just install our wheel.
-          pip install "$WHEEL_FILE"
+          pip install "${WHEEL_FILE}[all]"
           python -c "import jatic_dota; print('import ok')"
           python -c "from jatic_dota import inference; print('inference ok')"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}-${{ matrix.variant }}
+          name: wheels-${{ matrix.os }}-py${{ matrix.python }}-${{ matrix.variant }}
           path: dist/*.whl
           if-no-files-found: error
 
       - name: Upload sdist
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && matrix.variant == 'cpu'
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11' && matrix.variant == 'cpu'
         uses: actions/upload-artifact@v4
         with:
           name: sdist

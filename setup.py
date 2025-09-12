@@ -68,6 +68,9 @@ def get_extensions():
         os.getenv("FORCE_CUDA") == "1" and os.uname().sysname != "Darwin"
     ) or (torch.cuda.is_available() and (CUDA_HOME is not None or is_rocm))
 
+    if use_cuda and not os.getenv("TORCH_CUDA_ARCH_LIST"):
+        os.environ["TORCH_CUDA_ARCH_LIST"] = "7.5;8.0;8.6;8.9;9.0"
+
     ext_cls = CUDAExtension if use_cuda else CppExtension
     macros = [("WITH_HIP", None)] if is_rocm else ([("WITH_CUDA", None)] if use_cuda else [])
     extra = {"cxx": ["-O3"]}

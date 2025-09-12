@@ -75,6 +75,23 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
 
+      - name: Ensure compatible GCC (Linux + CUDA variants)
+        if: runner.os == 'Linux' && matrix.variant != 'cpu'
+        run: |
+          sudo apt-get update
+          case "${{ matrix.variant }}" in
+            cu118) ver=11 ;;            # CUDA 11.8 -> GCC 11
+            cu121|cu124) ver=12 ;;      # CUDA 12.1/12.4 -> GCC 12
+          esac
+          sudo apt-get install -y gcc-$ver g++-$ver
+          # Make that GCC the default so the CUDA installer sees it:
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-$ver 100 \
+                                   --slave /usr/bin/g++ g++ /usr/bin/g++-$ver
+          echo "CC=/usr/bin/gcc-$ver"           >> $GITHUB_ENV
+          echo "CXX=/usr/bin/g++-$ver"          >> $GITHUB_ENV
+          echo "CUDAHOSTCXX=/usr/bin/g++-$ver"  >> $GITHUB_ENV
+          echo "NVCC_FLAGS=-ccbin=/usr/bin/gcc-$ver" >> $GITHUB_ENV
+
       # --- CUDA Toolkit only for Linux + CUDA variants ---
       - name: Install CUDA Toolkit
         if: runner.os == 'Linux' && matrix.variant != 'cpu'
@@ -82,6 +99,8 @@ jobs:
         with:
           # Map variants to specific CUDA toolkits
           cuda: ${{ matrix.variant == 'cu118' && '11.8.0' || matrix.variant == 'cu121' && '12.1.1' || '12.4.1' }}
+          # Skip the compiler version gating; we already pinned GCC above.
+          linux-local-args: '["--toolkit","--silent","--override"]'
           # Make the action's log artifact name unique per matrix run to avoid 409 Conflict
           log-file-suffix: ${{ matrix.variant }}-py${{ matrix.python }}-${{ runner.os }}-${{ github.run_id }}
 

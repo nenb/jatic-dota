@@ -10,19 +10,8 @@ description = "A standalone distribution of BBAVectors-Oriented-Object-Detection
 authors = [
     { name = "Reference Implementation Team", email = "connect@quansight.com" },
 ]
-dependencies = [
-    "torch==2.4.1; platform_system in ['Darwin','Linux']",
-    "torchvision==0.19.1; platform_system in ['Darwin','Linux']",
-    "shapely==2.0.7",
-    "pillow==11.1.0",
-    "numpy==2.2.4",
-    "httpx==0.28.1",
-    "matplotlib==3.10.1",
-    "tqdm==4.67.1",
-    "opencv-python==4.12.0.88",
-    "fvcore==0.1.5.post20221221",
-    "tensorboard==1.15.0",
-]
+dynamic = ["dependencies"]
+
 
 [project.optional-dependencies]
 dev = [

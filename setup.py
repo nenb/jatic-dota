@@ -1,6 +1,6 @@
 from pathlib import Path
 import os, shutil, torch
-from setuptools import setup
+from setuptools import setup, find_packages
 from torch.utils.cpp_extension import CppExtension, CUDAExtension, BuildExtension
 
 ROOT   = Path(__file__).parent.resolve()
@@ -10,6 +10,31 @@ D2PKG  = VENDOR / "detectron2"
 CSRC   = D2PKG / "layers" / "csrc"
 
 PKG = "jatic_dota._vendor.detectron2.detectron2"
+
+def torch_requirements():
+    # Variants: cpu (default), cu118, cu121, cu124
+    variant = os.environ.get("JATIC_TORCH_VARIANT", "cpu")
+    suffix = {
+        "cpu": "",
+        "cu118": "+cu118",
+        "cu121": "+cu121",
+        "cu124": "+cu124",
+    }[variant]
+    base = [f"torch==2.4.1{suffix}", f"torchvision==0.19.1{suffix}"]
+    return base
+
+install_requires = torch_requirements() + [
+    "shapely==2.0.7",
+    "pillow==11.1.0",
+    "numpy==2.2.4",
+    "httpx==0.28.1",
+    "matplotlib==3.10.1",
+    "tqdm==4.67.1",
+    "opencv-python==4.12.0.88",
+    "fvcore==0.1.5.post20221221",
+    "tensorboard==1.15.0",
+]
+
 
 def rel(p: Path) -> str:
     return os.path.relpath(str(p), str(ROOT)).replace(os.sep, "/")
@@ -69,6 +94,10 @@ def get_extensions():
     )]
 
 setup(
+    name="jatic-dota",
+    packages=find_packages("src"),
+    package_dir={"": "src"},
+    install_requires=install_requires,
     ext_modules=get_extensions(),
     cmdclass={"build_ext": BuildExtension},
 )

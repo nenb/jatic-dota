@@ -1,4 +1,4 @@
-name: Build Wheels
+name: Build Wheels (CPU only)
 
 on:
   push:
@@ -9,40 +9,45 @@ on:
 
 jobs:
   build-wheels:
-    name: ${{ matrix.os }} py${{ matrix.python }} ${{ matrix.variant }}
+    name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux CPU
-          - { os: ubuntu-latest, python: '3.10', variant: cpu }
-          - { os: ubuntu-latest, python: '3.11', variant: cpu }
-          - { os: ubuntu-latest, python: '3.12', variant: cpu }
-
-          # Linux CUDA 11.8
-          - { os: ubuntu-latest, python: '3.10', variant: cu118 }
-          - { os: ubuntu-latest, python: '3.11', variant: cu118 }
-          - { os: ubuntu-latest, python: '3.12', variant: cu118 }
-
-          # Linux CUDA 12.1
-          - { os: ubuntu-latest, python: '3.10', variant: cu121 }
-          - { os: ubuntu-latest, python: '3.11', variant: cu121 }
-          - { os: ubuntu-latest, python: '3.12', variant: cu121 }
-
-          # Linux CUDA 12.4
-          - { os: ubuntu-latest, python: '3.10', variant: cu124 }
-          - { os: ubuntu-latest, python: '3.11', variant: cu124 }
-          - { os: ubuntu-latest, python: '3.12', variant: cu124 }
-
-          # macOS (CPU only)
-          - { os: macos-latest, python: '3.10', variant: cpu }
-          - { os: macos-latest, python: '3.11', variant: cpu }
-          - { os: macos-latest, python: '3.12', variant: cpu }
+          - { os: ubuntu-latest }   # Linux → manylinux wheels
+          - { os: macos-latest }    # macOS → native wheels
 
     env:
+      # Build these Python versions
+      CIBW_BUILD: "cp310-* cp311-* cp312-*"
+      CIBW_SKIP: "*-musllinux*"
+
+      # Linux: produce manylinux-tagged wheels (2_28 by default)
+      CIBW_ARCHS_LINUX: "x86_64"
+      CIBW_MANYLINUX_X86_64_IMAGE: "quay.io/pypa/manylinux_2_28_x86_64"
+      CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
+
+      # macOS: ARM runners by default; build arm64 wheels
+      CIBW_ARCHS_MACOS: "arm64"
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11.0"
+
+      # toolchain / build speed
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
-      TORCH_CUDA_ARCH_LIST: "7.5;8.0;8.6;8.9;9.0"  # ignored on cpu/mac
+
+      # If your build needs PyTorch headers even for CPU, install it before build:
+      CIBW_BEFORE_BUILD_LINUX: |
+        python -m pip install -U pip wheel build ninja packaging
+        pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
+      CIBW_BEFORE_BUILD_MACOS: |
+        python -m pip install -U pip wheel build ninja packaging
+        pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
+
+      # Your package can read these if needed
+      CIBW_ENVIRONMENT: "FORCE_CUDA=0 JATIC_TORCH_VARIANT=cpu"
+
+      # Optional: increase verbosity a bit
+      CIBW_BUILD_VERBOSITY: "1"
 
     steps:
       - name: Checkout (with submodules)
@@ -51,120 +56,37 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Sanity check vendored Detectron2 sources
-        run: |
-          ls -la src/jatic_dota/_vendor/detectron2/detectron2/layers || true
-          ls -la src/jatic_dota/_vendor/detectron2/detectron2/layers/csrc || true
-          python - <<'PY'
-          import os, sys
-          p="src/jatic_dota/_vendor/detectron2/detectron2/layers/csrc"
-          ok = os.path.isdir(p) and any(fn.endswith((".cpp",".cu")) for _,_,fs in os.walk(p) for fn in fs)
-          sys.exit(0 if ok else 1)
-          PY
-
-      - name: Set up Python ${{ matrix.python }}
+      - name: Set up driver Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.11"
 
-      - name: macOS build flags
-        if: runner.os == 'macOS'
+      - name: Install cibuildwheel
+        run: python -m pip install -U cibuildwheel
+
+      - name: Build wheels (manylinux on Linux, native on macOS)
+        run: python -m cibuildwheel --output-dir wheelhouse
+
+      - name: Build sdist (once on Linux)
+        if: runner.os == 'Linux'
         run: |
-          echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
-          echo "ARCHFLAGS=-arch arm64" >> $GITHUB_ENV
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
+          python -m pip install -U build
+          python -m build --sdist --outdir wheelhouse
 
-      - name: Ensure compatible GCC (Linux + CUDA variants)
-        if: runner.os == 'Linux' && matrix.variant != 'cpu'
+      - name: Smoke test one built wheel
+        shell: bash
         run: |
-          sudo apt-get update
-          case "${{ matrix.variant }}" in
-            cu118) ver=11 ;;            # CUDA 11.8 -> GCC 11
-            cu121|cu124) ver=12 ;;      # CUDA 12.1/12.4 -> GCC 12
-          esac
-          sudo apt-get install -y gcc-$ver g++-$ver
-          # Make that GCC the default so the CUDA installer sees it:
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-$ver 100 \
-                                   --slave /usr/bin/g++ g++ /usr/bin/g++-$ver
-          echo "CC=/usr/bin/gcc-$ver"           >> $GITHUB_ENV
-          echo "CXX=/usr/bin/g++-$ver"          >> $GITHUB_ENV
-          echo "CUDAHOSTCXX=/usr/bin/g++-$ver"  >> $GITHUB_ENV
-          echo "NVCC_FLAGS=-ccbin=/usr/bin/gcc-$ver" >> $GITHUB_ENV
+          whl=$(ls wheelhouse/*.whl | head -n1)
+          python -m pip install "$whl"
+          python - <<'PY'
+          import importlib
+          pkg = importlib.import_module("<your_top_level_package_name>")
+          print("Import OK:", pkg.__name__)
+          PY
 
-      # --- CUDA Toolkit only for Linux + CUDA variants ---
-      - name: Install CUDA Toolkit
-        if: runner.os == 'Linux' && matrix.variant != 'cpu'
-        uses: Jimver/cuda-toolkit@v0.2.24
-        with:
-          # Map variants to specific CUDA toolkits
-          cuda: ${{ matrix.variant == 'cu118' && '11.8.0' || matrix.variant == 'cu121' && '12.1.1' || '12.4.1' }}
-          # Skip the compiler version gating; we already pinned GCC above.
-          linux-local-args: '["--toolkit","--silent","--override"]'
-          # Make the action's log artifact name unique per matrix run to avoid 409 Conflict
-          log-file-suffix: ${{ matrix.variant }}-py${{ matrix.python }}-${{ runner.os }}-${{ github.run_id }}
-
-      # --- Per-variant env for setup.py ---
-      - name: Configure build variant env
-        run: |
-          if [ "${{ matrix.variant }}" = "cpu" ]; then
-            echo "JATIC_TORCH_VARIANT=cpu" >> $GITHUB_ENV
-            echo "FORCE_CUDA=0" >> $GITHUB_ENV
-          else
-            echo "JATIC_TORCH_VARIANT=${{ matrix.variant }}" >> $GITHUB_ENV
-            echo "FORCE_CUDA=1" >> $GITHUB_ENV
-          fi
-
-      - name: Install build deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install "setuptools>=68" wheel build ninja packaging
-
-      # Install the right Torch for the variant so build_ext can find headers/libs
-      - name: Install matching PyTorch
-        run: |
-          case "${{ matrix.variant }}" in
-            cpu)
-              # macOS and Linux CPU wheels
-              pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
-              ;;
-            cu118)
-              pip install torch==2.4.1+cu118 torchvision==0.19.1+cu118 --index-url https://download.pytorch.org/whl/cu118
-              ;;
-            cu121)
-              pip install torch==2.4.1+cu121 torchvision==0.19.1+cu121 --index-url https://download.pytorch.org/whl/cu121
-              ;;
-            cu124)
-              pip install torch==2.4.1+cu124 torchvision==0.19.1+cu124 --index-url https://download.pytorch.org/whl/cu124
-              ;;
-          esac
-          python -c "import torch, torchvision; print('Torch:', torch.__version__, '| CUDA:', torch.version.cuda)"
-
-      - name: Build wheel (no isolation so Torch is visible)
-        run: python -m build --wheel --no-isolation -v
-
-      - name: Build sdist (single)
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11' && matrix.variant == 'cpu'
-        run: python -m build --sdist --no-isolation -v
-
-      - name: Smoke test install
-        run: |
-          WHEEL_FILE=$(ls dist/*.whl)
-          pip install "${WHEEL_FILE}[all]"
-          python -c "import jatic_dota; print('import ok')"
-          python -c "from jatic_dota import inference; print('inference ok')"
-
-      - name: Upload wheels
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python }}-${{ matrix.variant }}
-          path: dist/*.whl
-          if-no-files-found: error
-
-      - name: Upload sdist
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11' && matrix.variant == 'cpu'
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: dist/*.tar.gz
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*
           if-no-files-found: error

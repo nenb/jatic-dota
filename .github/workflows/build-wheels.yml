@@ -24,8 +24,8 @@ jobs:
       CIBW_SKIP: "*-musllinux*"
 
       # Use pip as the frontend and disable build isolation so Torch from BEFORE_BUILD is visible
-      CIBW_BUILD_FRONTEND: "pip"
-      CIBW_ENVIRONMENT: "PIP_NO_BUILD_ISOLATION=0 FORCE_CUDA=0 JATIC_TORCH_VARIANT=cpu"
+      CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
+      CIBW_ENVIRONMENT: "FORCE_CUDA=0 JATIC_TORCH_VARIANT=cpu"
 
       # manylinux settings (default policy is manylinux_2_28)
       CIBW_ARCHS_LINUX: "x86_64"
@@ -42,10 +42,10 @@ jobs:
 
       # Install build deps + Torch **before** building (runs inside cibuildwheel's venv)
       CIBW_BEFORE_BUILD_LINUX: |
-        python -m pip install -U pip wheel build ninja packaging
+        python -m pip install -U pip setuptools wheel build ninja packaging
         pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
       CIBW_BEFORE_BUILD_MACOS: |
-        python -m pip install -U pip wheel build ninja packaging
+        python -m pip install -U pip setuptools wheel build ninja packaging
         pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
 
     steps:

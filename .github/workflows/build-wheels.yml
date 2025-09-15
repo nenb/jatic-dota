@@ -19,35 +19,34 @@ jobs:
           - { os: macos-latest }    # macOS → native wheels
 
     env:
-      # Build these Python versions
+      # Build these CPython versions
       CIBW_BUILD: "cp310-* cp311-* cp312-*"
       CIBW_SKIP: "*-musllinux*"
 
-      # Linux: produce manylinux-tagged wheels (2_28 by default)
+      # Use pip as the frontend and disable build isolation so Torch from BEFORE_BUILD is visible
+      CIBW_BUILD_FRONTEND: "pip"
+      CIBW_ENVIRONMENT: "PIP_NO_BUILD_ISOLATION=1 FORCE_CUDA=0 JATIC_TORCH_VARIANT=cpu"
+
+      # manylinux settings (default policy is manylinux_2_28)
       CIBW_ARCHS_LINUX: "x86_64"
       CIBW_MANYLINUX_X86_64_IMAGE: "quay.io/pypa/manylinux_2_28_x86_64"
       CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
 
-      # macOS: ARM runners by default; build arm64 wheels
+      # macOS: arm64 runners by default; set deployment target if needed
       CIBW_ARCHS_MACOS: "arm64"
       CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11.0"
 
-      # toolchain / build speed
+      # Toolchain / verbosity
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
+      CIBW_BUILD_VERBOSITY: "1"
 
-      # If your build needs PyTorch headers even for CPU, install it before build:
+      # Install build deps + Torch **before** building (runs inside cibuildwheel's venv)
       CIBW_BEFORE_BUILD_LINUX: |
         python -m pip install -U pip wheel build ninja packaging
         pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
       CIBW_BEFORE_BUILD_MACOS: |
         python -m pip install -U pip wheel build ninja packaging
         pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
-
-      # Your package can read these if needed
-      CIBW_ENVIRONMENT: "FORCE_CUDA=0 JATIC_TORCH_VARIANT=cpu"
-
-      # Optional: increase verbosity a bit
-      CIBW_BUILD_VERBOSITY: "1"
 
     steps:
       - name: Checkout (with submodules)
@@ -71,9 +70,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python -m pip install -U build
+          # sdist may need torch too if your setup.py imports it; re-use same env
           python -m build --sdist --outdir wheelhouse
 
-      - name: Smoke test one built wheel
+      - name: Smoke test one wheel
         shell: bash
         run: |
           whl=$(ls wheelhouse/*.whl | head -n1)

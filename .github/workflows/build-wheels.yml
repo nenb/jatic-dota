@@ -15,38 +15,45 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest }   # Linux → manylinux wheels
-          - { os: macos-latest }    # macOS → native wheels
+          - { os: ubuntu-latest }   # → manylinux wheels
+          - { os: macos-latest }    # → macOS arm64 wheels
 
     env:
-      # Build these CPython versions
+      # CPython versions
       CIBW_BUILD: "cp310-* cp311-* cp312-*"
       CIBW_SKIP: "*-musllinux*"
 
-      # Use pip as the frontend and disable build isolation so Torch from BEFORE_BUILD is visible
+      # Use pip as frontend and disable isolation so Torch from BEFORE_BUILD is visible
       CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
-      CIBW_ENVIRONMENT: "FORCE_CUDA=0 JATIC_TORCH_VARIANT=cpu"
-
-      # manylinux settings (default policy is manylinux_2_28)
-      CIBW_ARCHS_LINUX: "x86_64"
-      CIBW_MANYLINUX_X86_64_IMAGE: "quay.io/pypa/manylinux_2_28_x86_64"
-      CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
-
-      # macOS: arm64 runners by default; set deployment target if needed
-      CIBW_ARCHS_MACOS: "arm64"
-      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11.0"
-
-      # Toolchain / verbosity
-      CMAKE_BUILD_PARALLEL_LEVEL: "4"
       CIBW_BUILD_VERBOSITY: "1"
 
-      # Install build deps + Torch **before** building (runs inside cibuildwheel's venv)
+      # Common compile env your package may read
+      CIBW_ENVIRONMENT: "FORCE_CUDA=0 JATIC_TORCH_VARIANT=cpu"
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
+
+      # ---------- Linux (manylinux) ----------
+      CIBW_ARCHS_LINUX: "x86_64"
+      CIBW_MANYLINUX_X86_64_IMAGE: "quay.io/pypa/manylinux_2_28_x86_64"
+      # Preinstall build tools + CPU Torch inside cibuildwheel's build env
       CIBW_BEFORE_BUILD_LINUX: |
         python -m pip install -U pip setuptools wheel build ninja packaging
         pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
+      # Let auditwheel *find* PyTorch .so via LD_LIBRARY_PATH and vendor them
+      CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+        LIBTORCH=$(python -c 'import os, torch; print(os.path.join(os.path.dirname(torch.__file__), "lib"))');
+        export LD_LIBRARY_PATH="$LIBTORCH:$LD_LIBRARY_PATH";
+        auditwheel repair -w {dest_dir} {wheel}
+
+      # ---------- macOS (arm64) ----------
+      CIBW_ARCHS_MACOS: "arm64"
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11.0"
       CIBW_BEFORE_BUILD_MACOS: |
         python -m pip install -U pip setuptools wheel build ninja packaging
         pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
+      # Tell delocate where PyTorch dylibs live so it can vendor them
+      CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
+        LIBTORCH=$(python -c 'import os, torch; print(os.path.join(os.path.dirname(torch.__file__), "lib"))');
+        delocate-wheel -v -w {dest_dir} -L "$LIBTORCH" --require-archs arm64 {wheel}
 
     steps:
       - name: Checkout (with submodules)
@@ -63,16 +70,16 @@ jobs:
       - name: Install cibuildwheel
         run: python -m pip install -U cibuildwheel
 
-      - name: Build wheels (manylinux on Linux, native on macOS)
+      - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
 
       - name: Build sdist (once on Linux)
         if: runner.os == 'Linux'
         run: |
           python -m pip install -U build
-          # sdist may need torch too if your setup.py imports it; re-use same env
           python -m build --sdist --outdir wheelhouse
 
+      # Optional quick sanity test on one wheel
       - name: Smoke test one wheel
         shell: bash
         run: |
@@ -80,7 +87,8 @@ jobs:
           python -m pip install "$whl"
           python - <<'PY'
           import importlib
-          pkg = importlib.import_module("<your_top_level_package_name>")
+          # Replace with your import name:
+          pkg = importlib.import_module("jatic_dota")
           print("Import OK:", pkg.__name__)
           PY
 
